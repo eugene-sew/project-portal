@@ -24,9 +24,15 @@ class PaystackClient:
         """
         if self.is_mock:
             logger.warning("PAYSTACK: Using mock transaction initialization.")
+            # Dynamically resolve origin from callback_url for production staging deployments
+            origin = "http://localhost:5173"
+            if callback_url and "://" in callback_url:
+                parts = callback_url.split("/")
+                origin = "/".join(parts[:3]) # e.g. "https://projects.eugenedev.cloud"
+            
             # Point to a mock payment page on the frontend
             mock_auth_url = (
-                f"http://localhost:5173/mock-pay?"
+                f"{origin}/mock-pay?"
                 f"reference={reference}&"
                 f"amount={amount_in_kobo / 100}&"
                 f"email={email}&"
