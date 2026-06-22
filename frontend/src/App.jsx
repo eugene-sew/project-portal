@@ -553,6 +553,23 @@ function AdminDashboard() {
                             Left: {formatCurrency(project.remaining_balance, project.currency)}
                           </div>
                         )}
+                        {/* SLEEK PROGRESS BAR */}
+                        <div style={{ 
+                          width: '120px', 
+                          height: '6px', 
+                          background: 'rgba(255,255,255,0.05)', 
+                          borderRadius: '3px', 
+                          marginTop: '8px', 
+                          overflow: 'hidden' 
+                        }}>
+                          <div style={{ 
+                            width: `${Math.min(100, Math.max(0, (project.total_paid / project.amount) * 100))}%`, 
+                            height: '100%', 
+                            background: project.status === 'paid' ? '#10b981' : '#f59e0b',
+                            borderRadius: '3px',
+                            transition: 'width 0.3s ease'
+                          }} />
+                        </div>
                       </td>
                       <td>
                         <span className={`badge badge-${project.status}`}>
@@ -807,7 +824,7 @@ function AdminDashboard() {
               </div>
 
               <div className="form-group">
-                <label>Amount Paid Offline (Deposit)</label>
+                <label>Amount Paid Offline (Deposit / Cash / Bank Transfer)</label>
                 <input 
                   type="number" 
                   step="0.01" 
@@ -816,8 +833,11 @@ function AdminDashboard() {
                   value={initialPaidAmount}
                   onChange={(e) => setInitialPaidAmount(e.target.value)}
                 />
-                {amount && initialPaidAmount && (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: '6px' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--admin-text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
+                  ⚠️ Only enter offline payments. Online payments made by clients via the checkout link are automatically tracked by the system.
+                </div>
+                {amount && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: '8px' }}>
                     Remaining Balance: {formatCurrency(Math.max(0, parseFloat(amount) - (parseFloat(initialPaidAmount) || 0)), currency)}
                   </div>
                 )}
@@ -935,8 +955,27 @@ function AdminDashboard() {
                 </div>
               </div>
 
+              {editingProject && (editingProject.total_paid - editingProject.initial_paid_amount) > 0 && (
+                <div style={{ 
+                  background: 'rgba(16, 185, 129, 0.05)', 
+                  border: '1px solid rgba(16, 185, 129, 0.1)', 
+                  borderRadius: 'var(--radius-sm)', 
+                  padding: '12px', 
+                  marginBottom: '15px', 
+                  fontSize: '0.85rem' 
+                }}>
+                  <span style={{ fontWeight: 600, color: '#10b981' }}>✓ Online Payments Received: </span>
+                  <span style={{ fontWeight: 700, color: '#fff' }}>
+                    {formatCurrency(editingProject.total_paid - editingProject.initial_paid_amount, editCurrency)}
+                  </span>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--admin-text-secondary)', marginTop: '4px' }}>
+                    This amount was received securely via Paystack checkout and is tracked automatically.
+                  </div>
+                </div>
+              )}
+
               <div className="form-group">
-                <label>Amount Paid Offline (Deposit)</label>
+                <label>Amount Paid Offline (Deposits / Cash / Bank Transfer)</label>
                 <input 
                   type="number" 
                   step="0.01" 
@@ -945,9 +984,29 @@ function AdminDashboard() {
                   value={editInitialPaidAmount}
                   onChange={(e) => setEditInitialPaidAmount(e.target.value)}
                 />
+                <div style={{ fontSize: '0.75rem', color: 'var(--admin-text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
+                  ⚠️ Only enter offline payments. Do not re-enter the online payments listed above to avoid double-counting.
+                </div>
+                {editingProject && editInitialPaidAmount && 
+                  parseFloat(editInitialPaidAmount) === (editingProject.total_paid - editingProject.initial_paid_amount) && 
+                  (editingProject.total_paid - editingProject.initial_paid_amount) > 0 && (
+                  <div style={{ 
+                    marginTop: '8px', 
+                    padding: '8px 12px', 
+                    background: 'rgba(239, 68, 68, 0.1)', 
+                    border: '1px solid rgba(239, 68, 68, 0.2)', 
+                    borderRadius: 'var(--radius-sm)', 
+                    color: '#f87171', 
+                    fontSize: '0.75rem',
+                    lineHeight: '1.4'
+                  }}>
+                    <strong>⚠️ Potential Double-Counting:</strong> The amount you entered matches the <strong>Online Payments Received ({formatCurrency(editingProject.total_paid - editingProject.initial_paid_amount, editCurrency)})</strong>. 
+                    If this payment was received online, set this field to <strong>0</strong>. Only fill this out if you received an <em>additional</em> offline payment of this amount.
+                  </div>
+                )}
                 {editAmount && (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: '6px' }}>
-                    Remaining Balance: {formatCurrency(Math.max(0, parseFloat(editAmount) - (parseFloat(editInitialPaidAmount) || 0)), editCurrency)}
+                  <div style={{ fontSize: '0.85rem', color: '#fff', marginTop: '10px', fontWeight: 600 }}>
+                    Remaining Unpaid Balance: {formatCurrency(Math.max(0, parseFloat(editAmount) - (parseFloat(editInitialPaidAmount) || 0) - (editingProject ? (editingProject.total_paid - editingProject.initial_paid_amount) : 0)), editCurrency)}
                   </div>
                 )}
               </div>
@@ -1178,6 +1237,25 @@ function ClientPayment() {
             }}>
               <span style={{ color: '#fff' }}>Remaining Balance:</span>
               <span style={{ color: 'var(--client-primary)' }}>{formatCurrency(project.remaining_balance, project.currency)}</span>
+            </div>
+          </div>
+
+          {/* PAYMENT PROGRESS BAR */}
+          <div style={{ marginBottom: '30px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--client-text-secondary)', marginBottom: '8px' }}>
+              <span>Payment Progress</span>
+              <span style={{ fontWeight: 600, color: project.status === 'paid' ? '#10b981' : 'var(--client-primary)' }}>
+                {Math.round((project.total_paid / project.amount) * 100)}% Paid
+              </span>
+            </div>
+            <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+              <div style={{ 
+                width: `${Math.min(100, Math.max(0, (project.total_paid / project.amount) * 100))}%`, 
+                height: '100%', 
+                background: project.status === 'paid' ? '#10b981' : 'var(--client-primary)', 
+                borderRadius: '4px',
+                transition: 'width 0.5s ease-out'
+              }} />
             </div>
           </div>
 

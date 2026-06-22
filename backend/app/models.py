@@ -29,7 +29,7 @@ class Project(Base):
     @property
     def total_paid(self) -> float:
         success_payments = sum(p.amount_paid for p in self.payments if p.status == "success" and p.amount_paid is not None)
-        return float(success_payments + self.initial_paid_amount)
+        return float(success_payments + (self.initial_paid_amount or 0.0))
 
     @property
     def remaining_balance(self) -> float:

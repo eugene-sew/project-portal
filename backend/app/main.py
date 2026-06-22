@@ -373,7 +373,7 @@ def verify_payment(reference: str, db: Session = Depends(get_db)):
                 
             # Update Project status dynamically
             other_successful_payments = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None)
-            total_p = other_successful_payments + payment.amount_paid + project.initial_paid_amount
+            total_p = other_successful_payments + payment.amount_paid + (project.initial_paid_amount or 0.0)
             
             if total_p >= project.amount:
                 project.status = "paid"
@@ -401,7 +401,7 @@ def verify_payment(reference: str, db: Session = Depends(get_db)):
             payment.status = "failed"
             payment.paystack_response = json.dumps(data)
             # Retain status as partial if it had previous payments, otherwise pending/failed
-            total_p = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None) + project.initial_paid_amount
+            total_p = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None) + (project.initial_paid_amount or 0.0)
             if total_p >= project.amount:
                 project.status = "paid"
             elif total_p > 0:
@@ -467,7 +467,7 @@ async def paystack_webhook(
                         
                     # Update Project status dynamically
                     other_successful_payments = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None)
-                    total_p = other_successful_payments + payment.amount_paid + project.initial_paid_amount
+                    total_p = other_successful_payments + payment.amount_paid + (project.initial_paid_amount or 0.0)
                     
                     if total_p >= project.amount:
                         project.status = "paid"
