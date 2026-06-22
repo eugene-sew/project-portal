@@ -17,6 +17,7 @@ class Project(Base):
     project_name = Column(String(255), nullable=False)
     amount = Column(Float, nullable=False)
     currency = Column(String(10), nullable=False, default="GHS")
+    initial_paid_amount = Column(Float, nullable=False, default=0.0)
     description = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default="pending")  # pending, paid, failed
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -24,6 +25,15 @@ class Project(Base):
 
     # Relationships
     payments = relationship("Payment", back_populates="project", cascade="all, delete-orphan")
+
+    @property
+    def total_paid(self) -> float:
+        success_payments = sum(p.amount_paid for p in self.payments if p.status == "success" and p.amount_paid is not None)
+        return float(success_payments + self.initial_paid_amount)
+
+    @property
+    def remaining_balance(self) -> float:
+        return max(0.0, float(self.amount - self.total_paid))
 
 
 class Payment(Base):

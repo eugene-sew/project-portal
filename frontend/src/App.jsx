@@ -145,10 +145,24 @@ function AdminDashboard() {
   const [projectName, setProjectName] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('GHS');
+  const [initialPaidAmount, setInitialPaidAmount] = useState('');
   const [description, setDescription] = useState('');
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
+
+  // Edit Project Modal Form State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingProject, setEditingProject] = useState(null);
+  const [editClientName, setEditClientName] = useState('');
+  const [editClientEmail, setEditClientEmail] = useState('');
+  const [editProjectName, setEditProjectName] = useState('');
+  const [editAmount, setEditAmount] = useState('');
+  const [editCurrency, setEditCurrency] = useState('GHS');
+  const [editInitialPaidAmount, setEditInitialPaidAmount] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editFormError, setEditFormError] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   const fetchDashboardData = async () => {
     const token = localStorage.getItem("admin_token");
@@ -214,6 +228,7 @@ function AdminDashboard() {
           project_name: projectName,
           amount: parseFloat(amount),
           currency,
+          initial_paid_amount: parseFloat(initialPaidAmount) || 0.0,
           description
         })
       });
@@ -228,6 +243,7 @@ function AdminDashboard() {
       setClientEmail('');
       setProjectName('');
       setAmount('');
+      setInitialPaidAmount('');
       setDescription('');
       setShowCreateModal(false);
       fetchDashboardData();
@@ -236,6 +252,58 @@ function AdminDashboard() {
       setFormError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openEditModal = (project) => {
+    setEditingProject(project);
+    setEditClientName(project.client_name);
+    setEditClientEmail(project.client_email);
+    setEditProjectName(project.project_name);
+    setEditAmount(project.amount.toString());
+    setEditCurrency(project.currency);
+    setEditInitialPaidAmount(project.initial_paid_amount.toString());
+    setEditDescription(project.description || '');
+    setEditFormError('');
+    setShowEditModal(true);
+  };
+
+  const handleEditProject = async (e) => {
+    e.preventDefault();
+    setEditFormError('');
+    setEditSubmitting(true);
+    const token = localStorage.getItem("admin_token");
+
+    try {
+      const response = await fetch(`${API_BASE}/admin/projects/${editingProject.id}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          client_name: editClientName,
+          client_email: editClientEmail,
+          project_name: editProjectName,
+          amount: parseFloat(editAmount),
+          currency: editCurrency,
+          initial_paid_amount: parseFloat(editInitialPaidAmount) || 0.0,
+          description: editDescription
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail ? JSON.stringify(data.detail) : "Failed to update project");
+      }
+
+      setShowEditModal(false);
+      setEditingProject(null);
+      fetchDashboardData();
+    } catch (err) {
+      setEditFormError(err.message);
+    } finally {
+      setEditSubmitting(false);
     }
   };
 
@@ -277,16 +345,35 @@ function AdminDashboard() {
 
   // --- STATS CALCULATIONS (Based on GHS/base currency matching screenshot) ---
   const paidProjects = projects.filter(p => p.status === 'paid');
-  const pendingProjects = projects.filter(p => p.status === 'pending');
+  const pendingProjects = projects.filter(p => p.status === 'pending' || p.status === 'partial');
   
   // Calculate total revenue and outstanding in GHS (Base)
-  const totalRevenue = paidProjects
+  const totalRevenue = projects
     .filter(p => p.currency === 'GHS')
-    .reduce((sum, p) => sum + p.amount, 0);
+    .reduce((sum, p) => sum + p.total_paid, 0);
 
-  const outstanding = pendingProjects
+  const outstanding = projects
     .filter(p => p.currency === 'GHS')
-    .reduce((sum, p) => sum + p.amount, 0);
+    .reduce((sum, p) => sum + p.remaining_balance, 0);
+
+  // Other currencies aggregation
+  const otherRevenue = Object.entries(
+    projects
+      .filter(p => p.currency !== 'GHS')
+      .reduce((acc, p) => {
+        acc[p.currency] = (acc[p.currency] || 0) + p.total_paid;
+        return acc;
+      }, {})
+  ).filter(([_, val]) => val > 0);
+
+  const otherOutstanding = Object.entries(
+    projects
+      .filter(p => p.currency !== 'GHS')
+      .reduce((acc, p) => {
+        acc[p.currency] = (acc[p.currency] || 0) + p.remaining_balance;
+        return acc;
+      }, {})
+  ).filter(([_, val]) => val > 0);
 
   // --- RENDERING SUB-VIEWS ---
   
@@ -312,12 +399,10 @@ function AdminDashboard() {
               </div>
             </div>
             <div className="stat-card-value">GH₵ {totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-            {/* If there are other currency revenues, show them as description */}
             <div className="stat-card-description">
-              {projects.filter(p => p.status === 'paid' && p.currency !== 'GHS').length > 0 ? (
+              {otherRevenue.length > 0 ? (
                 <span>
-                  + {projects.filter(p => p.status === 'paid' && p.currency !== 'GHS')
-                    .map(p => formatCurrency(p.amount, p.currency)).join(', ')}
+                  + {otherRevenue.map(([curr, val]) => formatCurrency(val, curr)).join(', ')}
                 </span>
               ) : 'Base GHS revenue'}
             </div>
@@ -333,10 +418,9 @@ function AdminDashboard() {
             </div>
             <div className="stat-card-value">GH₵ {outstanding.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
             <div className="stat-card-description">
-              {projects.filter(p => p.status === 'pending' && p.currency !== 'GHS').length > 0 ? (
+              {otherOutstanding.length > 0 ? (
                 <span>
-                  + {projects.filter(p => p.status === 'pending' && p.currency !== 'GHS')
-                    .map(p => formatCurrency(p.amount, p.currency)).join(', ')}
+                  + {otherOutstanding.map(([curr, val]) => formatCurrency(val, curr)).join(', ')}
                 </span>
               ) : 'Awaiting invoicing completion'}
             </div>
@@ -442,7 +526,7 @@ function AdminDashboard() {
                 <thead>
                   <tr>
                     <th>Project & Client Details</th>
-                    <th>Billing Amount</th>
+                    <th>Billing Summary</th>
                     <th>Status</th>
                     <th>Created On</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
@@ -457,11 +541,23 @@ function AdminDashboard() {
                           {project.client_name} • {project.client_email}
                         </div>
                       </td>
-                      <td style={{ fontWeight: 600 }}>{formatCurrency(project.amount, project.currency)}</td>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{formatCurrency(project.amount, project.currency)}</div>
+                        {project.total_paid > 0 && (
+                          <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '2px', fontWeight: 500 }}>
+                            Paid: {formatCurrency(project.total_paid, project.currency)}
+                          </div>
+                        )}
+                        {project.remaining_balance > 0 && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--admin-text-secondary)', marginTop: '2px' }}>
+                            Left: {formatCurrency(project.remaining_balance, project.currency)}
+                          </div>
+                        )}
+                      </td>
                       <td>
                         <span className={`badge badge-${project.status}`}>
                           {project.status === 'paid' && <CheckCircle size={10} />}
-                          {project.status === 'pending' && <Clock size={10} />}
+                          {(project.status === 'pending' || project.status === 'partial') && <Clock size={10} />}
                           {project.status}
                         </span>
                       </td>
@@ -470,6 +566,13 @@ function AdminDashboard() {
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                            onClick={() => openEditModal(project)}
+                          >
+                            Edit
+                          </button>
                           <button 
                             className="btn btn-secondary" 
                             style={{ padding: '6px 12px', fontSize: '0.8rem' }}
@@ -676,7 +779,7 @@ function AdminDashboard() {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '15px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                 <div className="form-group">
                   <label>Currency</label>
                   <select 
@@ -703,6 +806,23 @@ function AdminDashboard() {
                 </div>
               </div>
 
+              <div className="form-group">
+                <label>Amount Paid Offline (Deposit)</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  className="form-control" 
+                  placeholder="0.00 (optional)" 
+                  value={initialPaidAmount}
+                  onChange={(e) => setInitialPaidAmount(e.target.value)}
+                />
+                {amount && initialPaidAmount && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: '6px' }}>
+                    Remaining Balance: {formatCurrency(Math.max(0, parseFloat(amount) - (parseFloat(initialPaidAmount) || 0)), currency)}
+                  </div>
+                )}
+              </div>
+
               <div className="form-group" style={{ marginBottom: '25px' }}>
                 <label>Billing Description (Optional)</label>
                 <textarea 
@@ -724,6 +844,135 @@ function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* EDIT PROJECT MODAL */}
+      {showEditModal && editingProject && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.4)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 100,
+          padding: '20px'
+        }}>
+          <div className="content-card" style={{ width: '100%', maxWidth: '500px', marginBottom: 0, boxShadow: 'var(--shadow-lg)' }}>
+            <h3 style={{ marginBottom: '20px', fontSize: '1.25rem', fontWeight: 700 }}>Edit Project Invoice</h3>
+            
+            {editFormError && (
+              <div style={{ color: 'var(--failed)', background: 'var(--failed-bg)', border: '1px solid var(--failed-border)', padding: '10px', borderRadius: 'var(--radius-sm)', marginBottom: '15px', fontSize: '0.85rem' }}>
+                {editFormError}
+              </div>
+            )}
+
+            <form onSubmit={handleEditProject}>
+              <div className="form-group">
+                <label>Project Name</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  placeholder="e.g. Mobile App Redesign" 
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div className="form-group">
+                  <label>Client Name</label>
+                  <input 
+                    type="text" 
+                    className="form-control" 
+                    placeholder="e.g. Janet Doe" 
+                    value={editClientName}
+                    onChange={(e) => setEditClientName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Client Email</label>
+                  <input 
+                    type="email" 
+                    className="form-control" 
+                    placeholder="e.g. janet@example.com" 
+                    value={editClientEmail}
+                    onChange={(e) => setEditClientEmail(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div className="form-group">
+                  <label>Currency</label>
+                  <select 
+                    className="form-control" 
+                    value={editCurrency} 
+                    onChange={(e) => setEditCurrency(e.target.value)}
+                  >
+                    <option value="GHS">GHS (GH₵)</option>
+                    <option value="NGN">NGN (₦)</option>
+                    <option value="USD">USD ($)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Billing Amount</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    className="form-control" 
+                    placeholder="0.00" 
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Amount Paid Offline (Deposit)</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  className="form-control" 
+                  placeholder="0.00" 
+                  value={editInitialPaidAmount}
+                  onChange={(e) => setEditInitialPaidAmount(e.target.value)}
+                />
+                {editAmount && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: '6px' }}>
+                    Remaining Balance: {formatCurrency(Math.max(0, parseFloat(editAmount) - (parseFloat(editInitialPaidAmount) || 0)), editCurrency)}
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '25px' }}>
+                <label>Billing Description (Optional)</label>
+                <textarea 
+                  className="form-control" 
+                  rows="3" 
+                  placeholder="e.g. Design sprint milestones details, final deliverables, etc."
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                ></textarea>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => { setShowEditModal(false); setEditingProject(null); }}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={editSubmitting}>
+                  {editSubmitting ? "Saving Changes..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -737,6 +986,11 @@ function ClientPayment() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [paying, setPaying] = useState(false);
+  
+  // Custom Payment Options State
+  const [payMode, setPayMode] = useState('full'); // 'full' or 'custom'
+  const [customAmount, setCustomAmount] = useState('');
+  const [paymentError, setPaymentError] = useState('');
 
   useEffect(() => {
     const fetchProjectDetails = async () => {
@@ -757,13 +1011,33 @@ function ClientPayment() {
   }, [id]);
 
   const handlePayNow = async () => {
+    setPaymentError('');
     setPaying(true);
+    
+    let amountToPay = project.remaining_balance;
+    
+    if (payMode === 'custom') {
+      const parsedAmount = parseFloat(customAmount);
+      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        setPaymentError("Please enter a valid amount greater than 0.");
+        setPaying(false);
+        return;
+      }
+      if (parsedAmount > project.remaining_balance + 0.01) {
+        setPaymentError(`Payment amount cannot exceed the remaining balance of ${formatCurrency(project.remaining_balance, project.currency)}.`);
+        setPaying(false);
+        return;
+      }
+      amountToPay = parsedAmount;
+    }
+    
     try {
       const response = await fetch(`${API_BASE}/projects/${id}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          callback_url: `${window.location.origin}/pay/verify`
+          callback_url: `${window.location.origin}/pay/verify`,
+          amount: payMode === 'custom' ? amountToPay : undefined
         })
       });
       const data = await response.json();
@@ -807,9 +1081,11 @@ function ClientPayment() {
     );
   }
 
-  const activePayment = project.payments && project.payments.length > 0 
-    ? project.payments.find(p => p.status === 'success') || project.payments[project.payments.length - 1]
-    : null;
+  const successPayments = project.payments && project.payments.length > 0
+    ? project.payments.filter(p => p.status === 'success')
+    : [];
+
+  const hasHistory = successPayments.length > 0 || project.initial_paid_amount > 0;
 
   return (
     <div className="client-wrapper">
@@ -843,8 +1119,10 @@ function ClientPayment() {
               <h2 style={{ fontSize: '1.65rem', marginTop: '2px', color: '#fff' }}>{project.project_name}</h2>
             </div>
             <div>
-              <span className={`badge ${project.status === 'paid' ? 'client-badge-paid' : 'client-badge-pending'}`} style={{ fontSize: '0.8rem', padding: '6px 14px' }}>
-                {project.status === 'paid' ? 'Paid' : 'Pending'}
+              <span className={`badge badge-${project.status}`} style={{ fontSize: '0.8rem', padding: '6px 14px' }}>
+                {project.status === 'paid' && 'Paid'}
+                {project.status === 'partial' && 'Partial'}
+                {project.status === 'pending' && 'Pending'}
               </span>
             </div>
           </div>
@@ -864,41 +1142,132 @@ function ClientPayment() {
           </div>
 
           {project.description && (
-            <div className="client-description-card">
+            <div className="client-description-card" style={{ marginBottom: '24px' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--client-text-secondary)', display: 'block', marginBottom: '4px' }}>Project Terms / Scope:</span>
               <p style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{project.description}</p>
             </div>
           )}
 
-          <div className="client-totals-card">
-            <div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--client-text-secondary)' }}>Total Invoice Amount</span>
-              <div style={{ fontSize: '0.7rem', color: 'var(--client-text-secondary)', opacity: 0.7 }}>Inclusive of payment gateway fees</div>
+          {/* FINANCIAL OVERVIEW CARD */}
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.03)', 
+            border: '1px solid rgba(255, 255, 255, 0.08)', 
+            borderRadius: 'var(--radius-sm)', 
+            padding: '20px', 
+            marginBottom: '24px' 
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '0.9rem' }}>
+              <span style={{ color: 'var(--client-text-secondary)' }}>Total Project Cost:</span>
+              <span style={{ fontWeight: 700, color: '#fff' }}>{formatCurrency(project.amount, project.currency)}</span>
             </div>
-            <div style={{ fontSize: '1.85rem', fontWeight: 800, fontFamily: 'var(--font-heading)' }}>
-              {formatCurrency(project.amount, project.currency)}
+            
+            {project.total_paid > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '0.9rem' }}>
+                <span style={{ color: '#10b981' }}>Total Amount Paid:</span>
+                <span style={{ fontWeight: 700, color: '#10b981' }}>-{formatCurrency(project.total_paid, project.currency)}</span>
+              </div>
+            )}
+            
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              borderTop: '1px solid rgba(255,255,255,0.08)', 
+              paddingTop: '12px',
+              fontSize: '1.25rem', 
+              fontWeight: 800 
+            }}>
+              <span style={{ color: '#fff' }}>Remaining Balance:</span>
+              <span style={{ color: 'var(--client-primary)' }}>{formatCurrency(project.remaining_balance, project.currency)}</span>
             </div>
           </div>
 
           <div className="no-print">
-            {project.status === 'pending' ? (
-              <button 
-                className="client-btn-pay" 
-                onClick={handlePayNow}
-                disabled={paying}
-              >
-                {paying ? (
-                  <>
-                    <RefreshCw className="animate-spin" size={18} />
-                    Redirecting to Paystack...
-                  </>
-                ) : (
-                  <>
-                    <CreditCard size={18} />
-                    Secure Checkout
-                  </>
+            {project.status !== 'paid' && project.remaining_balance > 0 ? (
+              <div>
+                {/* SELECT PAYMENT MODE */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--client-text-secondary)', marginBottom: '8px' }}>
+                    Payment Options
+                  </label>
+                  
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button 
+                      type="button" 
+                      onClick={() => setPayMode('full')}
+                      style={{
+                        flex: 1,
+                        padding: '12px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: payMode === 'full' ? 'var(--client-primary)' : 'rgba(255,255,255,0.03)',
+                        color: payMode === 'full' ? '#000' : '#fff',
+                        border: '1px solid ' + (payMode === 'full' ? 'var(--client-primary)' : 'rgba(255,255,255,0.08)'),
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      Pay Full Balance
+                    </button>
+                    
+                    <button 
+                      type="button" 
+                      onClick={() => setPayMode('custom')}
+                      style={{
+                        flex: 1,
+                        padding: '12px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: payMode === 'custom' ? 'var(--client-primary)' : 'rgba(255,255,255,0.03)',
+                        color: payMode === 'custom' ? '#000' : '#fff',
+                        border: '1px solid ' + (payMode === 'custom' ? 'var(--client-primary)' : 'rgba(255,255,255,0.08)'),
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      Pay Part Amount
+                    </button>
+                  </div>
+                </div>
+
+                {payMode === 'custom' && (
+                  <div style={{ marginBottom: '20px' }} className="form-group">
+                    <label>Enter Amount to Pay ({project.currency})</label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      className="form-control"
+                      placeholder={`Min: 0.01 • Max: ${project.remaining_balance}`}
+                      value={customAmount}
+                      onChange={(e) => setCustomAmount(e.target.value)}
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
+                    />
+                  </div>
                 )}
-              </button>
+
+                {paymentError && (
+                  <div style={{ color: 'var(--failed)', background: 'var(--failed-bg)', border: '1px solid var(--failed-border)', padding: '10px', borderRadius: 'var(--radius-sm)', marginBottom: '15px', fontSize: '0.85rem' }}>
+                    {paymentError}
+                  </div>
+                )}
+
+                <button 
+                  className="client-btn-pay" 
+                  onClick={handlePayNow}
+                  disabled={paying}
+                >
+                  {paying ? (
+                    <>
+                      <RefreshCw className="animate-spin" size={18} />
+                      Redirecting to Paystack...
+                    </>
+                  ) : (
+                    <>
+                      <CreditCard size={18} />
+                      Secure Checkout ({formatCurrency(payMode === 'full' ? project.remaining_balance : (parseFloat(customAmount) || 0), project.currency)})
+                    </>
+                  )}
+                </button>
+              </div>
             ) : (
               <div style={{ 
                 border: '1px solid var(--success-border)', 
@@ -913,33 +1282,61 @@ function ClientPayment() {
                 fontWeight: 600
               }}>
                 <ShieldCheck size={20} />
-                Transaction Cleared
+                Invoice Fully Settled
               </div>
             )}
           </div>
 
-          {project.status === 'paid' && activePayment && (
-            <div style={{ marginTop: '30px', borderTop: '1px solid var(--admin-border)', paddingTop: '20px' }}>
-              <h3 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--admin-text-secondary)' }}>Payment Audit details</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', fontSize: '0.8rem' }}>
-                <div>
-                  <span style={{ color: 'var(--admin-text-secondary)' }}>Gateway Reference:</span>
-                  <div style={{ fontFamily: 'monospace', color: 'var(--admin-text-primary)', marginTop: '2px', wordBreak: 'break-all' }}>{activePayment.reference}</div>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--admin-text-secondary)' }}>Audit Date:</span>
-                  <div style={{ color: 'var(--admin-text-primary)', marginTop: '2px' }}>
-                    {activePayment.paid_at ? new Date(activePayment.paid_at).toLocaleString() : 'N/A'}
+          {/* AUDIT HISTORY TIMELINE */}
+          {hasHistory && (
+            <div style={{ marginTop: '30px', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '20px' }}>
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '12px', color: 'var(--client-text-secondary)' }}>Payment Timeline & Audit</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                
+                {project.initial_paid_amount > 0 && (
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    padding: '10px 14px', 
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.04)',
+                    borderRadius: 'var(--radius-sm)', 
+                    fontSize: '0.85rem' 
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: '#fff' }}>Offline Deposit / Paid Amount</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--client-text-secondary)' }}>Initial Setup</div>
+                    </div>
+                    <div style={{ fontWeight: 700, color: '#10b981' }}>
+                      +{formatCurrency(project.initial_paid_amount, project.currency)}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--admin-text-secondary)' }}>Payment Method:</span>
-                  <div style={{ color: 'var(--admin-text-primary)', marginTop: '2px' }}>Paystack Gateway Checkout</div>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--admin-text-secondary)' }}>Audit Status:</span>
-                  <div style={{ color: 'var(--success)', marginTop: '2px', fontWeight: 600 }}>Success</div>
-                </div>
+                )}
+
+                {successPayments.map((p) => (
+                  <div key={p.id} style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    padding: '10px 14px', 
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.04)',
+                    borderRadius: 'var(--radius-sm)', 
+                    fontSize: '0.85rem' 
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: '#fff' }}>Gateway Reference: {p.reference}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--client-text-secondary)' }}>
+                        {p.paid_at ? new Date(p.paid_at).toLocaleString() : new Date(p.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                    <div style={{ fontWeight: 700, color: '#10b981' }}>
+                      +{formatCurrency(p.amount_paid || project.amount, project.currency)}
+                    </div>
+                  </div>
+                ))}
+                
               </div>
             </div>
           )}

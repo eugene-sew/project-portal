@@ -36,6 +36,7 @@ class ProjectBase(BaseModel):
     project_name: str = Field(..., min_length=2, max_length=255)
     amount: float = Field(..., gt=0)
     currency: str = Field("GHS", min_length=3, max_length=10)
+    initial_paid_amount: float = Field(0.0, ge=0)
     description: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
@@ -49,10 +50,13 @@ class ProjectUpdate(BaseModel):
     currency: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
+    initial_paid_amount: Optional[float] = None
 
 class ProjectResponse(ProjectBase):
     id: str
     status: str
+    total_paid: float = 0.0
+    remaining_balance: float = 0.0
     created_at: datetime
     updated_at: datetime
     payments: List[PaymentResponse] = []

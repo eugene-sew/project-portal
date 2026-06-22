@@ -417,6 +417,12 @@ tr:hover td {
   border: 1px solid var(--pending-border);
 }
 
+.badge-partial {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
 .badge-failed {
   background: var(--failed-bg);
   color: var(--failed);

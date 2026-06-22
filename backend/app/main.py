@@ -139,7 +139,7 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: str = Depen
     
     total_projects = len(projects)
     total_paid = sum(1 for p in projects if p.status == "paid")
-    total_pending = sum(1 for p in projects if p.status == "pending")
+    total_pending = sum(1 for p in projects if p.status in ["pending", "partial"])
     
     by_currency = {}
     for p in projects:
@@ -148,10 +148,8 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: str = Depen
         
         stat = by_currency[p.currency]
         stat.total_amount += p.amount
-        if p.status == "paid":
-            stat.paid_amount += p.amount
-        elif p.status == "pending":
-            stat.pending_amount += p.amount
+        stat.paid_amount += p.total_paid
+        stat.pending_amount += p.remaining_balance
             
     return {
         "total_projects": total_projects,
@@ -191,14 +189,21 @@ def get_all_payments(db: Session = Depends(get_db), current_user: str = Depends(
 # 4. Admin Create Project
 @app.post("/api/admin/projects", response_model=ProjectResponse)
 def create_project(project_in: ProjectCreate, db: Session = Depends(get_db), current_user: str = Depends(get_current_admin)):
+    status = "pending"
+    if project_in.initial_paid_amount >= project_in.amount:
+        status = "paid"
+    elif project_in.initial_paid_amount > 0:
+        status = "partial"
+        
     db_project = Project(
         client_name=project_in.client_name,
         client_email=project_in.client_email,
         project_name=project_in.project_name,
         amount=project_in.amount,
         currency=project_in.currency.upper(),
+        initial_paid_amount=project_in.initial_paid_amount,
         description=project_in.description,
-        status="pending"
+        status=status
     )
     db.add(db_project)
     db.commit()
@@ -225,6 +230,15 @@ def update_project(project_id: str, project_in: ProjectUpdate, db: Session = Dep
         if field == "currency" and value:
             value = value.upper()
         setattr(project, field, value)
+        
+    # Recalculate status dynamically
+    total_p = project.total_paid
+    if total_p >= project.amount:
+        project.status = "paid"
+    elif total_p > 0:
+        project.status = "partial"
+    else:
+        project.status = "pending"
         
     db.commit()
     db.refresh(project)
@@ -258,16 +272,37 @@ def pay_project(project_id: str, request_data: dict, db: Session = Depends(get_d
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    if project.status == "paid":
-        raise HTTPException(status_code=400, detail="Project has already been paid for.")
+    if project.status == "paid" or project.remaining_balance <= 0:
+        raise HTTPException(status_code=400, detail="Project has already been fully paid for.")
         
     # Get callback URL from frontend request
     callback_url = request_data.get("callback_url")
     if not callback_url:
         raise HTTPException(status_code=400, detail="callback_url is required")
         
+    # Handle optional custom payment amount
+    custom_amount = request_data.get("amount")
+    if custom_amount is not None:
+        try:
+            amount_to_pay = float(custom_amount)
+            if amount_to_pay <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid custom payment amount.")
+        
+        if amount_to_pay > project.remaining_balance + 0.01:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment amount exceeds the remaining balance of {project.remaining_balance}."
+            )
+    else:
+        amount_to_pay = project.remaining_balance
+
+    if amount_to_pay <= 0:
+        raise HTTPException(status_code=400, detail="No remaining balance to pay.")
+
     # Paystack amount is in cents/kobo
-    amount_in_kobo = int(project.amount * 100)
+    amount_in_kobo = int(amount_to_pay * 100)
     
     # Generate unique transaction reference
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -286,6 +321,7 @@ def pay_project(project_id: str, request_data: dict, db: Session = Depends(get_d
         payment = Payment(
             project_id=project.id,
             reference=reference,
+            amount_paid=amount_to_pay,
             status="pending"
         )
         db.add(payment)
@@ -335,8 +371,14 @@ def verify_payment(reference: str, db: Session = Depends(get_db)):
             else:
                 payment.paid_at = datetime.utcnow()
                 
-            # Update Project
-            project.status = "paid"
+            # Update Project status dynamically
+            other_successful_payments = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None)
+            total_p = other_successful_payments + payment.amount_paid + project.initial_paid_amount
+            
+            if total_p >= project.amount:
+                project.status = "paid"
+            else:
+                project.status = "partial"
             
             db.commit()
             db.refresh(project)
@@ -346,7 +388,7 @@ def verify_payment(reference: str, db: Session = Depends(get_db)):
                 send_payment_notification(
                     client_name=project.client_name,
                     project_name=project.project_name,
-                    amount=project.amount,
+                    amount=payment.amount_paid,
                     currency=project.currency,
                     reference=reference
                 )
@@ -358,7 +400,14 @@ def verify_payment(reference: str, db: Session = Depends(get_db)):
             # Payment failed on Paystack
             payment.status = "failed"
             payment.paystack_response = json.dumps(data)
-            project.status = "failed"
+            # Retain status as partial if it had previous payments, otherwise pending/failed
+            total_p = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None) + project.initial_paid_amount
+            if total_p >= project.amount:
+                project.status = "paid"
+            elif total_p > 0:
+                project.status = "partial"
+            else:
+                project.status = "failed"
             db.commit()
             db.refresh(project)
             return project
@@ -416,8 +465,15 @@ async def paystack_webhook(
                     else:
                         payment.paid_at = datetime.utcnow()
                         
-                    # Update Project
-                    project.status = "paid"
+                    # Update Project status dynamically
+                    other_successful_payments = sum(p.amount_paid for p in project.payments if p.status == "success" and p.id != payment.id and p.amount_paid is not None)
+                    total_p = other_successful_payments + payment.amount_paid + project.initial_paid_amount
+                    
+                    if total_p >= project.amount:
+                        project.status = "paid"
+                    else:
+                        project.status = "partial"
+                    
                     db.commit()
                     
                     # Send email notification to admin (safe wrapper)
@@ -425,7 +481,7 @@ async def paystack_webhook(
                         send_payment_notification(
                             client_name=project.client_name,
                             project_name=project.project_name,
-                            amount=project.amount,
+                            amount=payment.amount_paid,
                             currency=project.currency,
                             reference=reference
                         )
